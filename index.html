@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Min ekonomi</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root {
+    --ink:#1C2430; --mute:#6B7480; --line:#E4E2DB; --paper:#F6F5F0;
+    --card:#FFFFFF; --brass:#B8912F; --steel:#3E6B8A; --sage:#5B8A6B; --brick:#B15B4E;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background: var(--paper); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--ink); }
+  #root { max-width: 720px; margin: 0 auto; padding: 24px; }
+  input[type=number], input[type=text] { font-family: inherit; }
+  .mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback } = React;
+
+const INK="#1C2430", MUTE="#6B7480", LINE="#E4E2DB", PAPER="#F6F5F0", CARD="#FFFFFF";
+const BRASS="#B8912F", STEEL="#3E6B8A", SAGE="#5B8A6B", BRICK="#B15B4E";
+const EXPENSE_COLORS = ["#3E6B8A","#B8912F","#5B8A6B","#B15B4E","#7A6FA6","#8B93A0","#4A9DA8","#C77B3E","#9C6B4E","#6B7CA6"];
+
+const uid = () => Math.random().toString(36).slice(2, 9);
+const fmt = (n) => Math.round(n || 0).toLocaleString("sv-SE") + " kr";
+
+const STORAGE_KEY = "ekonomi-data-v1";
+
+const FIXED_EXPENSE_DEFS = [
+  { name: "Hyra", amount: 7592 },
+  { name: "Bredband", amount: 469 },
+  { name: "Försäkring", amount: 1000 },
+];
+const VARIABLE_EXPENSE_DEFS = [
+  { name: "Mat", hint: "Matbutiker + köp under 500 kr på macken/kiosk", amount: 138 },
+  { name: "Bil", hint: "Bensin/service, köp över 500 kr", amount: 0 },
+  { name: "Nöje", hint: "Restaurang, krog, pub", amount: 0 },
+  { name: "Shopping", hint: "Kläder, skor m.m.", amount: 0 },
+  { name: "Hälsa/Vård", hint: "Tandläkare, apotek, gym", amount: 0 },
+  { name: "Resor/Semester", amount: 0 },
+  { name: "Digitalt/Prenumerationer", amount: 0 },
+  { name: "Kortköp övrigt", hint: "Ospecificerat från kontoutdrag", amount: 13240 },
+];
+const SAVINGS_DEFS = [{ name: "Avanza / Sparande", amount: 5000 }];
+
+const DEFAULT_STATE = {
+  salary: 26239,
+  otherIncome: [{ id: uid(), name: "Tradera", amount: 5221 }, { id: uid(), name: "Pantamera-retur", amount: 47 }],
+  fixedExpenses: FIXED_EXPENSE_DEFS.map(d => ({ id: uid(), ...d })),
+  variableExpenses: VARIABLE_EXPENSE_DEFS.map(d => ({ id: uid(), ...d })),
+  savings: SAVINGS_DEFS.map(d => ({ id: uid(), ...d })),
+  extraExpenses: [],
+  swishIn: 2720,
+  swishOut: 0,
+  assets: [{ id: uid(), name: "Aktieportfölj", amount: 0 }],
+  debts: [],
+  snapshots: [],
+};
+
+function LockedRow({ item, onChange, hint }) {
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ flex: "1 1 55%", minWidth: 0, fontSize: 14, padding: "8px 10px" }}>{item.name}</div>
+        <input type="number" value={item.amount}
+          onChange={(e) => onChange({ ...item, amount: parseFloat(e.target.value) || 0 })}
+          style={{ width: 110, fontSize: 14, textAlign: "right", padding: "8px 10px", border: `1px solid ${LINE}`, borderRadius: 8, background: PAPER, color: INK }}
+          className="mono" />
+      </div>
+      {hint && <div style={{ fontSize: 11, color: MUTE, padding: "0 10px", marginTop: 2 }}>{hint}</div>}
+    </div>
+  );
+}
+
+function Row({ item, onChange, onRemove, placeholder }) {
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+      <input value={item.name} onChange={(e) => onChange({ ...item, name: e.target.value })} placeholder={placeholder || "Namn"}
+        style={{ flex: "1 1 55%", minWidth: 0, fontSize: 14, padding: "8px 10px", border: `1px solid ${LINE}`, borderRadius: 8, background: PAPER, color: INK }} />
+      <input type="number" value={item.amount} onChange={(e) => onChange({ ...item, amount: parseFloat(e.target.value) || 0 })}
+        style={{ width: 110, fontSize: 14, textAlign: "right", padding: "8px 10px", border: `1px solid ${LINE}`, borderRadius: 8, background: PAPER, color: INK }} className="mono" />
+      <button onClick={onRemove} style={{ border: "none", background: "transparent", color: MUTE, cursor: "pointer", padding: 6 }}>✕</button>
+    </div>
+  );
+}
+
+function Section({ title, total, totalColor, children, onAdd, addLabel, subtitle }) {
+  return (
+    <div style={{ background: CARD, borderRadius: 12, border: `1px solid ${LINE}`, padding: 18, marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: subtitle ? 2 : 14 }}>
+        <div style={{ fontWeight: 500, fontSize: 15 }}>{title}</div>
+        {total !== undefined && <div className="mono" style={{ fontSize: 15, fontWeight: 500, color: totalColor || INK }}>{fmt(total)}</div>}
+      </div>
+      {subtitle && <div style={{ fontSize: 12, color: MUTE, marginBottom: 12 }}>{subtitle}</div>}
+      {children}
+      {onAdd && <button onClick={onAdd} style={{ fontSize: 13, color: STEEL, background: "transparent", border: "none", cursor: "pointer", padding: "6px 0", marginTop: 4 }}>+ {addLabel}</button>}
+    </div>
+  );
+}
+
+function StatCard({ label, value, sub, accent }) {
+  return (
+    <div style={{ background: CARD, border: `1px solid ${LINE}`, borderRadius: 12, padding: "14px 16px", flex: "1 1 140px", minWidth: 140 }}>
+      <div style={{ fontSize: 12, color: MUTE, marginBottom: 6 }}>{label}</div>
+      <div className="mono" style={{ fontSize: 22, fontWeight: 500, color: accent || INK }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: MUTE, marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Donut({ data }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (total <= 0) return null;
+  let acc = 0;
+  const stops = data.map((d, i) => {
+    const start = (acc / total) * 100;
+    acc += d.value;
+    const end = (acc / total) * 100;
+    return `${EXPENSE_COLORS[i % EXPENSE_COLORS.length]} ${start}% ${end}%`;
+  });
+  return (
+    <div style={{ width: 160, height: 160, borderRadius: "50%", background: `conic-gradient(${stops.join(",")})`, position: "relative", flexShrink: 0 }}>
+      <div style={{ position: "absolute", inset: 30, background: CARD, borderRadius: "50%" }} />
+    </div>
+  );
+}
+
+function CashFlowBars({ income, expenses, left }) {
+  const max = Math.max(income, expenses, Math.abs(left), 1);
+  const bars = [
+    { label: "Inkomst", value: income, color: STEEL },
+    { label: "Utgifter", value: expenses, color: BRICK },
+    { label: "Kvar", value: left, color: left >= 0 ? SAGE : BRICK },
+  ];
+  return (
+    <div style={{ display: "flex", gap: 20, alignItems: "flex-end", height: 140, padding: "0 8px" }}>
+      {bars.map(b => (
+        <div key={b.label} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+          <div className="mono" style={{ fontSize: 12, color: MUTE }}>{fmt(b.value)}</div>
+          <div style={{ width: "60%", height: Math.max(4, (Math.abs(b.value) / max) * 100), background: b.color, borderRadius: "4px 4px 0 0" }} />
+          <div style={{ fontSize: 12, color: MUTE }}>{b.label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function NetWorthLine({ snapshots }) {
+  if (snapshots.length < 2) return null;
+  const w = 600, h = 140, pad = 20;
+  const values = snapshots.map(s => s.netWorth);
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = max - min || 1;
+  const pts = snapshots.map((s, i) => {
+    const x = pad + (i / (snapshots.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((s.netWorth - min) / range) * (h - pad * 2);
+    return `${x},${y}`;
+  });
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: 160 }}>
+      <polyline points={pts.join(" ")} fill="none" stroke={BRASS} strokeWidth="2" />
+      {snapshots.map((s, i) => {
+        const [x, y] = pts[i].split(",");
+        return <circle key={s.id} cx={x} cy={y} r="4" fill={BRASS} />;
+      })}
+    </svg>
+  );
+}
+
+function App() {
+  const [state, setState] = useState(DEFAULT_STATE);
+  const [loaded, setLoaded] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) setState({ ...DEFAULT_STATE, ...JSON.parse(raw) });
+    } catch (e) {}
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+  }, [state, loaded]);
+
+  const totalOtherIncome = useMemo(() => state.otherIncome.reduce((s, i) => s + (i.amount || 0), 0), [state.otherIncome]);
+  const totalIncome = (state.salary || 0) + totalOtherIncome;
+  const totalFixed = useMemo(() => state.fixedExpenses.reduce((s, i) => s + (i.amount || 0), 0), [state.fixedExpenses]);
+  const totalVariable = useMemo(() => state.variableExpenses.reduce((s, i) => s + (i.amount || 0), 0), [state.variableExpenses]);
+  const totalExtra = useMemo(() => state.extraExpenses.reduce((s, i) => s + (i.amount || 0), 0), [state.extraExpenses]);
+  const totalSavings = useMemo(() => state.savings.reduce((s, i) => s + (i.amount || 0), 0), [state.savings]);
+  const totalExpenses = totalFixed + totalVariable + totalExtra + totalSavings;
+  const totalAssets = useMemo(() => state.assets.reduce((s, i) => s + (i.amount || 0), 0), [state.assets]);
+  const totalDebts = useMemo(() => state.debts.reduce((s, i) => s + (i.amount || 0), 0), [state.debts]);
+  const cashFlow = totalIncome - totalExpenses;
+  const netWorth = totalAssets - totalDebts;
+  const savingsRate = totalIncome > 0 ? (cashFlow / totalIncome) * 100 : 0;
+  const swishNet = (state.swishIn || 0) - (state.swishOut || 0);
+
+  const expenseByCategory = useMemo(() => {
+    const rows = [
+      ...state.fixedExpenses.map(e => ({ name: e.name, value: e.amount || 0 })),
+      ...state.variableExpenses.map(e => ({ name: e.name, value: e.amount || 0 })),
+      ...state.extraExpenses.map(e => ({ name: e.name || "Övrigt", value: e.amount || 0 })),
+      ...state.savings.map(e => ({ name: e.name, value: e.amount || 0 })),
+    ];
+    return rows.filter(d => d.value > 0);
+  }, [state.fixedExpenses, state.variableExpenses, state.extraExpenses, state.savings]);
+
+  const updateList = (key, id, newItem) => setState(s => ({ ...s, [key]: s[key].map(it => it.id === id ? newItem : it) }));
+  const addToList = (key, template) => setState(s => ({ ...s, [key]: [...s[key], { id: uid(), ...template }] }));
+  const removeFromList = (key, id) => setState(s => ({ ...s, [key]: s[key].filter(it => it.id !== id) }));
+
+  const saveSnapshot = (silent) => {
+    const label = new Date().toLocaleDateString("sv-SE", { year: "numeric", month: "short" });
+    setState(s => {
+      const filtered = s.snapshots.filter(sn => sn.label !== label);
+      return { ...s, snapshots: [...filtered, { id: uid(), label, netWorth, date: Date.now() }].sort((a, b) => a.date - b.date) };
+    });
+    if (!silent) { setSaveMsg("Läge sparat"); setTimeout(() => setSaveMsg(""), 2000); }
+  };
+
+  const startNewMonth = () => {
+    saveSnapshot(true);
+    setState(s => ({
+      ...s,
+      otherIncome: [],
+      variableExpenses: s.variableExpenses.map(v => ({ ...v, amount: 0 })),
+      savings: s.savings.map(v => ({ ...v, amount: 0 })),
+      extraExpenses: [],
+      swishIn: 0, swishOut: 0,
+    }));
+    setConfirmReset(false);
+    setSaveMsg("Ny månad — förra månaden sparad i historiken");
+    setTimeout(() => setSaveMsg(""), 2500);
+  };
+
+  if (!loaded) return <div style={{ padding: 40, textAlign: "center", color: MUTE }}>Laddar…</div>;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 20, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 12, letterSpacing: "0.06em", color: MUTE, textTransform: "uppercase", marginBottom: 4 }}>Din ekonomi</div>
+          <div className="mono" style={{ fontSize: 30, fontWeight: 500, color: netWorth >= 0 ? SAGE : BRICK }}>{fmt(netWorth)}</div>
+          <div style={{ fontSize: 13, color: MUTE }}>nettoförmögenhet</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {!confirmReset ? (
+            <button onClick={() => setConfirmReset(true)} style={{ fontSize: 13, background: CARD, border: `1px solid ${LINE}`, borderRadius: 8, padding: "9px 14px", cursor: "pointer" }}>↺ Ny månad</button>
+          ) : (
+            <>
+              <button onClick={startNewMonth} style={{ fontSize: 13, color: CARD, background: BRICK, border: "none", borderRadius: 8, padding: "9px 14px", cursor: "pointer" }}>Bekräfta</button>
+              <button onClick={() => setConfirmReset(false)} style={{ fontSize: 13, color: MUTE, background: "transparent", border: `1px solid ${LINE}`, borderRadius: 8, padding: "9px 14px", cursor: "pointer" }}>Avbryt</button>
+            </>
+          )}
+          <button onClick={() => saveSnapshot(false)} style={{ fontSize: 13, color: CARD, background: BRASS, border: "none", borderRadius: 8, padding: "9px 14px", cursor: "pointer" }}>📷 Spara läge</button>
+        </div>
+      </div>
+      {saveMsg && <div style={{ fontSize: 12, color: SAGE, marginBottom: 12 }}>{saveMsg}</div>}
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
+        <StatCard label="Inkomst / mån" value={fmt(totalIncome)} accent={STEEL} />
+        <StatCard label="Utgifter / mån" value={fmt(totalExpenses)} accent={BRICK} />
+        <StatCard label="Kvar" value={fmt(cashFlow)} sub={`${savingsRate.toFixed(0)}% av inkomsten`} accent={cashFlow >= 0 ? SAGE : BRICK} />
+        <StatCard label="Skulder" value={fmt(totalDebts)} accent={MUTE} />
+      </div>
+
+      <div style={{ background: CARD, borderRadius: 12, border: `1px solid ${LINE}`, padding: 18, marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontWeight: 500, fontSize: 15 }}>Inkomster</div>
+          <div className="mono" style={{ fontSize: 15, fontWeight: 500, color: STEEL }}>{fmt(totalIncome)}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <div style={{ flex: "1 1 55%", fontSize: 14, padding: "8px 10px" }}>Lön</div>
+          <input type="number" value={state.salary} onChange={(e) => setState(s => ({ ...s, salary: parseFloat(e.target.value) || 0 }))}
+            style={{ width: 110, fontSize: 14, textAlign: "right", padding: "8px 10px", border: `1px solid ${LINE}`, borderRadius: 8, background: PAPER, color: INK }} className="mono" />
+        </div>
+        <div style={{ fontSize: 12, color: MUTE, margin: "10px 0 6px" }}>Övriga inkomster</div>
+        {state.otherIncome.map(item => <Row key={item.id} item={item} onChange={(v) => updateList("otherIncome", item.id, v)} onRemove={() => removeFromList("otherIncome", item.id)} placeholder="T.ex. Tradera" />)}
+        <button onClick={() => addToList("otherIncome", { name: "", amount: 0 })} style={{ fontSize: 13, color: STEEL, background: "transparent", border: "none", cursor: "pointer", padding: "6px 0" }}>+ Lägg till inkomst</button>
+      </div>
+
+      <Section title="Fasta utgifter" total={totalFixed} totalColor={BRICK} subtitle="Samma varje månad — nollställs inte vid 'Ny månad'">
+        {state.fixedExpenses.map(item => <LockedRow key={item.id} item={item} onChange={(v) => updateList("fixedExpenses", item.id, v)} />)}
+      </Section>
+
+      <Section title="Rörliga utgifter" total={totalVariable} totalColor={BRICK}>
+        {state.variableExpenses.map(item => <LockedRow key={item.id} item={item} onChange={(v) => updateList("variableExpenses", item.id, v)} hint={item.hint} />)}
+        <div style={{ fontSize: 12, color: MUTE, margin: "10px 0 6px" }}>Övrigt som inte passar ovan</div>
+        {state.extraExpenses.map(item => <Row key={item.id} item={item} onChange={(v) => updateList("extraExpenses", item.id, v)} onRemove={() => removeFromList("extraExpenses", item.id)} placeholder="Egen post" />)}
+        <button onClick={() => addToList("extraExpenses", { name: "", amount: 0 })} style={{ fontSize: 13, color: STEEL, background: "transparent", border: "none", cursor: "pointer", padding: "6px 0" }}>+ Lägg till egen post</button>
+      </Section>
+
+      <Section title="Sparande/Investeringar" total={totalSavings} totalColor={SAGE}>
+        {state.savings.map(item => <Row key={item.id} item={item} onChange={(v) => updateList("savings", item.id, v)} onRemove={() => removeFromList("savings", item.id)} placeholder="T.ex. Avanza" />)}
+        <button onClick={() => addToList("savings", { name: "", amount: 0 })} style={{ fontSize: 13, color: STEEL, background: "transparent", border: "none", cursor: "pointer", padding: "6px 0" }}>+ Lägg till sparpost</button>
+      </Section>
+
+      <div style={{ background: CARD, borderRadius: 12, border: `1px solid ${LINE}`, padding: 18, marginBottom: 14 }}>
+        <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 2 }}>Swish</div>
+        <div style={{ fontSize: 12, color: MUTE, marginBottom: 12 }}>Visas separat — räknas inte med i totalen ovan</div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 140px", display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1, fontSize: 13, color: MUTE }}>In</div>
+            <input type="number" value={state.swishIn} onChange={(e) => setState(s => ({ ...s, swishIn: parseFloat(e.target.value) || 0 }))}
+              style={{ width: 100, fontSize: 14, textAlign: "right", padding: "8px 10px", border: `1px solid ${LINE}`, borderRadius: 8, background: PAPER, color: INK }} className="mono" />
+          </div>
+          <div style={{ flex: "1 1 140px", display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1, fontSize: 13, color: MUTE }}>Ut</div>
+            <input type="number" value={state.swishOut} onChange={(e) => setState(s => ({ ...s, swishOut: parseFloat(e.target.value) || 0 }))}
+              style={{ width: 100, fontSize: 14, textAlign: "right", padding: "8px 10px", border: `1px solid ${LINE}`, borderRadius: 8, background: PAPER, color: INK }} className="mono" />
+          </div>
+          <div style={{ flex: "1 1 140px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+            <div style={{ fontSize: 13, color: MUTE, marginRight: 8 }}>Netto</div>
+            <div className="mono" style={{ fontSize: 15, fontWeight: 500, color: swishNet >= 0 ? SAGE : BRICK }}>{fmt(swishNet)}</div>
+          </div>
+        </div>
+      </div>
+
+      {expenseByCategory.length > 0 && (
+        <div style={{ background: CARD, borderRadius: 12, border: `1px solid ${LINE}`, padding: 18, marginBottom: 16 }}>
+          <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 8 }}>Utgifter per kategori</div>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+            <Donut data={expenseByCategory} />
+            <div style={{ flex: 1, minWidth: 160 }}>
+              {[...expenseByCategory].sort((a, b) => b.value - a.value).map((e, i) => (
+                <div key={e.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 6 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 2, background: EXPENSE_COLORS[i % EXPENSE_COLORS.length], flexShrink: 0 }} />
+                  <span style={{ flex: 1 }}>{e.name}</span>
+                  <span className="mono" style={{ color: MUTE }}>{fmt(e.value)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ background: CARD, borderRadius: 12, border: `1px solid ${LINE}`, padding: 18, marginBottom: 16 }}>
+        <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 8 }}>Kassaflöde denna månad</div>
+        <CashFlowBars income={totalIncome} expenses={totalExpenses} left={cashFlow} />
+      </div>
+
+      <Section title="Tillgångar" total={totalAssets} totalColor={SAGE} onAdd={() => addToList("assets", { name: "", amount: 0 })} addLabel="Lägg till tillgång">
+        {state.assets.map(item => <Row key={item.id} item={item} onChange={(v) => updateList("assets", item.id, v)} onRemove={() => removeFromList("assets", item.id)} placeholder="T.ex. Aktieportfölj, buffert" />)}
+      </Section>
+
+      <Section title="Skulder" total={totalDebts} totalColor={BRICK} onAdd={() => addToList("debts", { name: "", amount: 0 })} addLabel="Lägg till skuld">
+        {state.debts.map(item => <Row key={item.id} item={item} onChange={(v) => updateList("debts", item.id, v)} onRemove={() => removeFromList("debts", item.id)} placeholder="T.ex. Bolån" />)}
+        {state.debts.length === 0 && <div style={{ fontSize: 13, color: MUTE }}>Inga skulder registrerade.</div>}
+      </Section>
+
+      {state.snapshots.length > 1 && (
+        <div style={{ background: CARD, borderRadius: 12, border: `1px solid ${LINE}`, padding: 18 }}>
+          <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 8 }}>Nettoförmögenhet över tid</div>
+          <NetWorthLine snapshots={state.snapshots} />
+        </div>
+      )}
+
+      <div style={{ fontSize: 12, color: MUTE, textAlign: "center", marginTop: 20 }}>
+        Datan sparas i den här webbläsaren (localStorage). Klicka "Ny månad" när lönen kommer.
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
